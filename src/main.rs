@@ -1,6 +1,7 @@
 // [Note] TCP: Transmission Control Protocol. Lower-level protocol that describes how data is transmitted over a network but not what the information is.
 // [Note] HTTP: Hypertext Transfer Protocol. HTTP builds on top of TCP by defining the contents of the requests and responses. HTTP sends its data over TCP.
 use std::{
+    fs,
     io::{prelude::*, BufReader}, // Gives us access to traits and types that let us read from and write to the stream.
     net::{TcpListener, TcpStream},
 };
@@ -24,21 +25,38 @@ fn main() {
         //        It's a way for the program to interact with that resource without needing to know all the low-level details of how it's managed
         let stream = stream.unwrap();
 
-        // println!("Connection established!");
+        // Utilize the stream handle for communication
         handle_connection(stream);
     }
 
     fn handle_connection(mut stream: TcpStream) {
-        // Reading from the TcpStream and printing the data.
+        // Read from the TcpStream
         let buf_reader = BufReader::new(&mut stream);
+        let request_line = buf_reader
+            .lines()
+            .next() // Returns an Option<Result<String>>
+            .unwrap() // unwrap the Option. [Note] In production, we would handle errors gracefully.
+            .unwrap(); // unwrap the Result
 
-        // Collect the data from the none-empty lines in the stream
-        let http_request: Vec<_> = buf_reader
-            .lines() // Access the lines
-            .map(|result| result.unwrap()) // Unwrap the result
-            .take_while(|line| !line.is_empty()) // Take lines until an empty line is encountered. This is an iterator adaptor (on lines) that takes elements from the iterator while the predicate is true.
-            .collect();
+        // If the user requests the root page, respond with a 200 OK status and the contents of hello.html.
+        let (status_line, filename) = if request_line == "GET / HTTP/1.1" {
+            ("HTTP/1.1 200 OK", "hello.html")
+        } else {
+            ("HTTP/1.1 404 NOT FOUND", "404.html")
+        };
 
-        println!("Request: {:#?}", http_request);
+        let contents = fs::read_to_string(filename).unwrap();
+        let length = contents.len(); // [Note] len returns number of bytes in the string.
+
+        let log = format!(
+            "{status_line}\r\nContent-Type: text/html; charset=UTF-8\r\nContent-Length: {length}"
+        );
+
+        let response = format!("{status_line}\r\n\r\n{contents}");
+
+        println!("{log}"); // "console.log"
+        stream.write_all(response.as_bytes()).unwrap(); // Write the response to the stream.
     }
 }
+
+// _52766_276787664
