@@ -1,6 +1,9 @@
 // [Note] TCP: Transmission Control Protocol. Lower-level protocol that describes how data is transmitted over a network but not what the information is.
 // [Note] HTTP: Hypertext Transfer Protocol. HTTP builds on top of TCP by defining the contents of the requests and responses. HTTP sends its data over TCP.
-use std::net::TcpListener;
+use std::{
+    io::{prelude::*, BufReader}, // Gives us access to traits and types that let us read from and write to the stream.
+    net::{TcpListener, TcpStream},
+};
 
 fn main() {
     // Create a TCP listener on the specified address and port.
@@ -21,6 +24,21 @@ fn main() {
         //        It's a way for the program to interact with that resource without needing to know all the low-level details of how it's managed
         let stream = stream.unwrap();
 
-        println!("Connection established!");
+        // println!("Connection established!");
+        handle_connection(stream);
+    }
+
+    fn handle_connection(mut stream: TcpStream) {
+        // Reading from the TcpStream and printing the data.
+        let buf_reader = BufReader::new(&mut stream);
+
+        // Collect the data from the none-empty lines in the stream
+        let http_request: Vec<_> = buf_reader
+            .lines() // Access the lines
+            .map(|result| result.unwrap()) // Unwrap the result
+            .take_while(|line| !line.is_empty()) // Take lines until an empty line is encountered. This is an iterator adaptor (on lines) that takes elements from the iterator while the predicate is true.
+            .collect();
+
+        println!("Request: {:#?}", http_request);
     }
 }
