@@ -1,9 +1,14 @@
 // [Note] TCP: Transmission Control Protocol. Lower-level protocol that describes how data is transmitted over a network but not what the information is.
 // [Note] HTTP: Hypertext Transfer Protocol. HTTP builds on top of TCP by defining the contents of the requests and responses. HTTP sends its data over TCP.
+//
+// [Motivation] With a single-threaded server, we can only handle one request at a time. If a request takes a long time to process, it will block all other requests.
+// To handle multiple requests at the same time, we need to use a multi-threaded server.
 use std::{
     fs,
     io::{prelude::*, BufReader}, // Gives us access to traits and types that let us read from and write to the stream.
     net::{TcpListener, TcpStream},
+    thread,
+    time::Duration,
 };
 
 fn main() {
@@ -39,10 +44,16 @@ fn main() {
             .unwrap(); // unwrap the Result
 
         // If the user requests the root page, respond with a 200 OK status and the contents of hello.html.
-        let (status_line, filename) = if request_line == "GET / HTTP/1.1" {
-            ("HTTP/1.1 200 OK", "hello.html")
-        } else {
-            ("HTTP/1.1 404 NOT FOUND", "404.html")
+        let (status_line, filename) = match &request_line[..] {
+            "GET / HTTP/1.1" => ("HTTP/1.1 200 OK", "hello.html"),
+            "GET /sleep HTTP/1.1" => {
+                // Simulating a slow response
+                // Server sleep for 5 seconds before rendering the successful HTML page.
+                // As we are still single-threaded, any simultaneous requests will be queued and processed sequentially.
+                thread::sleep(Duration::from_secs(5));
+                ("HTTP/1.1 200 OK", "hello.html")
+            }
+            _ => ("HTTP/1.1 404 NOT FOUND", "404.html"),
         };
 
         let contents = fs::read_to_string(filename).unwrap();
@@ -60,3 +71,116 @@ fn main() {
 }
 
 // _52766_276787664
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use reqwest::blocking::Client;
+    use std::{thread, time::Duration, time::Instant};
+
+    /// Helper function to start the server in a background thread.
+    fn start_server() {
+        thread::spawn(|| {
+            main(); // or start_server() if you have a dedicated function
+        });
+        // Give the server a moment to bind (helps avoid connection errors).
+        thread::sleep(Duration::from_millis(500));
+    }
+
+    #[test]
+    fn test_ok_response() {
+        start_server();
+        let client = Client::new();
+
+        // Send a GET request to root ("/")
+        let resp = client.get("http://127.0.0.1:7878/").send().unwrap();
+        assert_eq!(resp.status(), 200, "Expected HTTP 200 for /");
+
+        // Verify the body contains the expected content
+        let contents = fs::read_to_string("hello.html").unwrap();
+        let body = resp.text().unwrap();
+        assert!(
+            body.contains(&contents),
+            "Body did not contain expected 'Hello, world!' text"
+        );
+    }
+
+    #[test]
+    fn test_404_response() {
+        start_server();
+        let client = Client::new();
+
+        // Request a non-existent path
+        let resp = client.get("http://127.0.0.1:7878/notfound").send().unwrap();
+        assert_eq!(resp.status(), 404, "Expected HTTP 404 for /notfound");
+
+        // Verify the body contains the expected content
+        let contents = fs::read_to_string("404.html").unwrap();
+        let body = resp.text().unwrap();
+        assert!(
+            body.contains(&contents),
+            "Body did not contain expected '404' text"
+        );
+    }
+
+    #[test]
+    fn test_sleep_response() {
+        start_server();
+        let client = Client::new();
+
+        // Measure how long the request takes
+        let start = Instant::now();
+        let resp = client.get("http://127.0.0.1:7878/sleep").send().unwrap();
+        let duration = start.elapsed();
+
+        assert_eq!(resp.status(), 200, "Expected HTTP 200 for /sleep");
+        // The server sleeps for 5s, ensure it took at least that long
+        assert!(
+            duration.as_secs() >= 5,
+            "Expected at least ~5s delay, got {:?} instead",
+            duration
+        );
+    }
+
+    #[test]
+    fn test_multiple_connections() {
+        start_server();
+        let client = Client::new();
+
+        // URIs to request in parallel
+        let uris = vec![
+            "http://127.0.0.1:7878/",
+            "http://127.0.0.1:7878/sleep",
+            "http://127.0.0.1:7878/notfound",
+        ];
+
+        // Spawn threads to simulate multiple concurrent connections
+        let mut handles = Vec::new();
+        for uri in uris {
+            let c = client.clone();
+            let u = uri;
+            let handle = std::thread::spawn(move || {
+                // Each thread performs a GET request
+                c.get(u).send()
+            });
+            handles.push((u, handle));
+        }
+
+        // Collect all responses and assert on status codes
+        for (uri, handle) in handles {
+            let resp = handle.join().unwrap().unwrap();
+            match uri {
+                "http://127.0.0.1:7878/" => {
+                    assert_eq!(resp.status(), 200, "Expected 200 for /");
+                }
+                "http://127.0.0.1:7878/sleep" => {
+                    assert_eq!(resp.status(), 200, "Expected 200 for /sleep");
+                }
+                "http://127.0.0.1:7878/notfound" => {
+                    assert_eq!(resp.status(), 404, "Expected 404 for /notfound");
+                }
+                _ => unreachable!("Unexpected URI"),
+            }
+        }
+    }
+}
