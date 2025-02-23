@@ -3,6 +3,8 @@
 //
 // [Motivation] With a single-threaded server, we can only handle one request at a time. If a request takes a long time to process, it will block all other requests.
 // To handle multiple requests at the same time, we need to use a multi-threaded server.
+use rusty_spinner::ThreadPool;
+
 use std::{
     fs,
     io::{prelude::*, BufReader}, // Gives us access to traits and types that let us read from and write to the stream.
@@ -15,6 +17,12 @@ fn main() {
     // Create a TCP listener on the specified address and port.
     // [Note] bind = connect. So we're connecting our listener to local host at port 7878.
     let listener = TcpListener::bind("127.0.0.1:7878").unwrap(); // bind returns a Result<T, E>. unwrap here will panic if an error occurs.
+
+    // Create a thread pool with 4 threads.
+    let pool = match ThreadPool::build(8) {
+        Ok(pool) => pool,
+        Err(e) => panic!("Failed to build thread pool: {e}"),
+    };
 
     // [Note] We're using a for loop to accept incoming connections. The for loop will iterate over the incoming connections and handle each one.
     // [Note] stream is is a Result<TcpStream, Error> type.
@@ -31,7 +39,10 @@ fn main() {
         let stream = stream.unwrap();
 
         // Utilize the stream handle for communication
-        handle_connection(stream);
+        pool.execute(|| {
+            // This is the closure we are passing to the thread pool
+            handle_connection(stream);
+        });
     }
 
     fn handle_connection(mut stream: TcpStream) {
